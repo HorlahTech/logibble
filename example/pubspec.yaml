@@ -1,0 +1,19 @@
+name: logibble_example
+description: Demo of the logibble package.
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dio: ^5.0.0
+  logibble:
+    path: ../
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
