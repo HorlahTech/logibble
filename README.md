@@ -1,21 +1,15 @@
 # logibble
 
-A draggable bug button that floats over your Flutter app in debug builds. Tap it to see every
-[Dio](https://pub.dev/packages/dio) request and your local storage, without leaving the app.
+A small debug button for Flutter apps that use [Dio](https://pub.dev/packages/dio). It floats over your
+app in debug builds. Tap it to see the requests your app made and what's in local storage.
 
-- **Network tab:** filterable list with status badges, timings and cache hits. Tap a request to see its
-  full request/response headers and pretty-printed JSON bodies. **Copy as cURL** in one tap.
-- **Storage tab:** secure storage, shared preferences, in-memory caches… Plug in any store in a few lines,
-  then view, copy, delete or clear its entries.
-- **Status at a glance:** the bubble shows an amber dot while a request is in flight and a red dot when
-  the latest one failed.
-- **Works with any router:** `MaterialApp`, `MaterialApp.router`, go_router, auto_route.
-- **Safe by default:** `enabled` defaults to `kDebugMode`. In release builds nothing is recorded and
-  the overlay renders only your app. Sensitive headers can be redacted.
-- **No wiring across layers:** the interceptor lives in your network code and the overlay at your app
-  root. They share `Logibble.instance`, so neither needs a reference to the other.
-- **No state-management lock-in:** it's a plain `ChangeNotifier`, and its only dependency is `dio`.
-  Prefer DI? Pass your own instance.
+In the network tab you can filter requests, see status codes and timings, open a request to read its
+headers and body, and copy it as a cURL command. The storage tab shows whatever stores you register
+(secure storage, shared preferences, a cache) and lets you delete entries.
+
+The button gets an amber dot while a request is in flight, and a red one if the last request failed.
+
+It's off in release builds: `enabled` defaults to `kDebugMode`.
 
 ## Install
 
@@ -23,11 +17,9 @@ A draggable bug button that floats over your Flutter app in debug builds. Tap it
 flutter pub add logibble
 ```
 
-## Usage
+## Setup
 
-Two lines, in two different places. They don't need to know about each other.
-
-**Where you build Dio** (your API client, network module, DI setup…):
+Add the interceptor wherever you create your Dio instance:
 
 ```dart
 import 'package:logibble/logibble.dart';
@@ -35,7 +27,7 @@ import 'package:logibble/logibble.dart';
 final dio = Dio()..interceptors.add(LogibbleInterceptor());
 ```
 
-**At the app root:**
+Then wrap your app in `MaterialApp.builder`:
 
 ```dart
 MaterialApp(
@@ -44,37 +36,38 @@ MaterialApp(
 );
 ```
 
-That's it. Run the app in debug mode and tap the bug. Both lines use the shared `Logibble.instance`, so
-requests recorded by the network layer show up in the overlay with no wiring between them.
+Both use `Logibble.instance` by default, so your network code and your app widget don't need to share
+anything. It works with `MaterialApp.router` too (go_router, auto_route).
 
-### Interceptor order
+## Interceptor order
 
-The interceptor reads request headers when the request **finishes**, so headers added by later
-interceptors (auth tokens, for example) still show up. Recommended order:
+Headers are read when the request completes, so anything added by interceptors after this one (like an
+auth token) will still show up. I'd put it before your auth interceptor, so a 401 and the retry after a
+token refresh both show up in the log:
 
 ```dart
 dio.interceptors.addAll([
-  cacheInterceptor,        // cache hits still get logged (see below)
-  LogibbleInterceptor(),   // before auth: you'll see the 401 *and* the retry
+  cacheInterceptor,
+  LogibbleInterceptor(),
   authInterceptor,
 ]);
 ```
 
-If your auth interceptor refreshes tokens with a second Dio instance, add a `LogibbleInterceptor()` to
-that one too.
+If you refresh tokens with a separate Dio instance, add an interceptor to that one as well.
 
-**Cache hits** are tagged `cache` when `response.extra['from_cache'] == true`. You can change the check:
+Requests answered from a cache are marked `cache` if `response.extra['from_cache'] == true`. If your
+cache uses a different flag:
 
 ```dart
 LogibbleInterceptor(isFromCache: (r) => r.extra['cached'] == true)
 ```
 
-### Storage
+## Storage
 
-Register storage sections from wherever that storage code lives, at any time before the inspector opens:
+logibble doesn't depend on any storage package. Register the stores you want to see, from wherever you
+set them up:
 
 ```dart
-// e.g. in your storage module
 Logibble.instance.storage.addAll([
   // flutter_secure_storage
   DebugStorage.map(
@@ -88,66 +81,52 @@ Logibble.instance.storage.addAll([
     name: 'Preferences',
     read: () async => {for (final k in prefs.getKeys()) k: prefs.get(k)},
     delete: (key) => prefs.remove(key),
-    clear: () => prefs.clear(),
   ),
-  // Anything else: build the entries yourself. Leave out delete/clear for a read-only section.
+  // or build the entries yourself
   DebugStorage(
     name: 'API cache',
     read: () async => [
       for (final e in apiCache.entries)
         DebugStorageEntry(key: e.key, value: e.value, note: 'expires ${e.expiresAt}'),
     ],
-    clear: () async => apiCache.clear(),
   ),
 ]);
 ```
 
-Values that are JSON, or strings holding JSON, are pretty-printed.
+Leave out `delete` or `clear` and those buttons won't appear. JSON values are formatted.
 
-### Options
+## Options
 
-All of these are on `Logibble.instance`, and on your own `Logibble(...)` if you create one.
-
-| Option | Default | |
+| | Default | |
 |---|---|---|
-| `enabled` | `kDebugMode` | Master switch. When false, nothing is recorded and no bubble is shown. Set it before `runApp`. |
-| `storage` | `[]` | Storage tab sections. The tab is hidden when empty. |
-| `redactHeaders` | `{}` | Header names (case-insensitive) shown as `••••`, e.g. `Logibble.instance.redactHeaders.add('authorization')`. |
-| `maxEntries` | `200` | Oldest requests are dropped past this. Constructor only. |
+| `enabled` | `kDebugMode` | When false nothing is recorded and the button isn't shown. Set it before `runApp`. |
+| `storage` | `[]` | Storage sections. The tab is hidden if this is empty. |
+| `redactHeaders` | `{}` | Header names to hide, e.g. `Logibble.instance.redactHeaders.add('authorization')`. |
+| `maxEntries` | `200` | How many requests to keep. Constructor only. |
 
-`LogibbleOverlay` takes an optional `navigatorKey`. Without one, it finds the first `Navigator`
-below it, which is your app's root navigator. You can also open the inspector yourself, for example
-from a hidden settings entry:
+`LogibbleOverlay` finds your root navigator on its own. You can pass `navigatorKey` if you want to be
+explicit.
+
+To open the inspector from somewhere else, like a settings screen:
 
 ```dart
 Navigator.of(context).push(MaterialPageRoute(builder: (_) => LogibbleInspectorPage()));
 ```
 
-### Using dependency injection instead
+## Without the global instance
 
-If you'd rather not use a global (Riverpod, get_it, or separate logs per test), create your own
-instance and pass it to both sides:
+If you use dependency injection, or want a separate log in tests, create your own and pass it to both:
 
 ```dart
-final logibble = Logibble(redactHeaders: {'authorization'});
+final logibble = Logibble();
 
 dio.interceptors.add(logibble.interceptor);
 LogibbleOverlay(logibble: logibble, child: child!);
 ```
 
-With Riverpod, for example:
+## Testing
 
-```dart
-final logibbleProvider = Provider((ref) => Logibble());
-
-// network layer
-dio.interceptors.add(ref.read(logibbleProvider).interceptor);
-
-// app root
-LogibbleOverlay(logibble: ref.read(logibbleProvider), child: child!);
-```
-
-### Testing
+The button has a key you can tap in widget tests:
 
 ```dart
 await tester.tap(find.byKey(LogibbleOverlay.buttonKey));
@@ -155,7 +134,7 @@ await tester.tap(find.byKey(LogibbleOverlay.buttonKey));
 
 ## Example
 
-See [`example/lib/main.dart`](example/lib/main.dart). To run it:
+There's a small app in [`example/`](example/lib/main.dart):
 
 ```sh
 cd example && flutter create . && flutter run
